@@ -1,8 +1,21 @@
+import sys
+import os
+
+# Добавляем директорию скрипта в путь для поиска локальных модулей
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+# Добавляем site-packages в путь для поиска модулей
+site_packages = r"C:\Users\UserVik\Python311\Lib\site-packages"
+if site_packages not in sys.path:
+    sys.path.insert(0, site_packages)
+
 import asyncio
 import logging
 from typing import Optional, Dict, List
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -209,9 +222,12 @@ async def cmd_start(message: Message):
             "/week - статистика за неделю\n"
             "/set_limit - установить дневную норму калорий\n"
             "/help - помощь\n\n"
-            "Также ты можешь просто написать мне что-то вроде:\n"
-            "<code>Завтрак: овсянка 200г, банан 1шт</code>\n"
-            "И я посчитаю калории!"
+            "Также ты можешь:\n"
+            "• Написать что съел: <code>овсянка 200г, банан 1шт</code>\n"
+            "• Или просто: <code>Съел борщ с хлебом и салат</code>\n"
+            "• Отправить фото штрих-кода продукта 📷\n"
+            "• Или написать штрих-код текстом: <code>4610169567144</code>\n\n"
+            "Я покажу КБЖУ (калории, белки, жиры, углеводы) и добавлю продукт в дневник!"
         )
         await message.answer(text, parse_mode='HTML')
     else:
@@ -237,7 +253,8 @@ async def cmd_help(message: Message):
         text = (
             "📝 <b>Подсчет калорий:</b>\n\n"
             "• Используй /add_meal для добавления приема пищи\n"
-            "• Или просто напиши: <code>Завтрак: яйца 2шт, хлеб 50г</code>\n"
+            "• Или просто напиши что съел: <code>Завтрак: яйца 2шт, хлеб 50г</code>\n"
+            "• Можно писать свободно: <code>Съел борщ с хлебом</code>\n"
             "• /today - посмотреть калории за сегодня\n"
             "• /week - статистика за неделю\n"
             "• /set_limit 2000 - установить дневную норму\n\n"
@@ -539,10 +556,11 @@ async def cmd_add_meal(message: Message):
         return
     
     await message.answer(
-        "📝 Напиши что ты съел в формате:\n"
-        "<code>Завтрак: овсянка 200г, банан 1шт, молоко 100мл</code>\n\n"
-        "Или просто:\n"
-        "<code>яйца 2шт, хлеб 50г</code>",
+        "📝 Напиши что ты съел. Можешь указать:\n"
+        "• Точные количества: <code>овсянка 200г, банан 1шт</code>\n"
+        "• Или просто описание: <code>Съел борщ с хлебом и салат</code>\n"
+        "• Или: <code>Завтрак: яичница из 2 яиц, тост с маслом</code>\n\n"
+        "Я распознаю продукты и посчитаю калории автоматически!",
         parse_mode='HTML'
     )
 
@@ -636,17 +654,254 @@ async def cmd_set_limit(message: Message):
         await message.answer("Произошла ошибка. Попробуй еще раз.")
 
 
+async def handle_photo(message: Message):
+    """Обработка фото со штрих-кодом"""
+    if message.chat.type != "private":
+        return
+    
+    try:
+        user_id = message.from_user.id
+        
+        # Получаем фото (берем самое большое)
+        photo = message.photo[-1]
+        
+        # Скачиваем фото
+        file_info = await bot.get_file(photo.file_id)
+        file_path = file_info.file_path
+        
+        # Скачиваем файл
+        import io
+        from PIL import Image
+        from pyzbar import pyzbar
+        
+        # Скачиваем фото в память
+        photo_bytes = io.BytesIO()
+        await bot.download(file_path, destination=photo_bytes)
+        photo_bytes.seek(0)
+        
+        # Открываем изображение
+        image = Image.open(photo_bytes)
+        
+        # Распознаем штрих-код
+        barcodes = pyzbar.decode(image)
+        
+        if not barcodes:
+            await message.answer(
+                "❌ Штрих-код не найден на фото.\n\n"
+                "Убедись, что:\n"
+                "• Штрих-код четко виден\n"
+                "• Фото хорошо освещено\n"
+                "• Штрих-код не размыт"
+            )
+            return
+        
+        # Берем первый найденный штрих-код
+        barcode_data = barcodes[0].data.decode('utf-8')
+        barcode_type = barcodes[0].type
+        
+        logger.info(f"Найден штрих-код: {barcode_data} (тип: {barcode_type})")
+        
+        # Отправляем сообщение о поиске
+        search_msg = await message.answer("🔍 Ищу продукт по штрих-коду...")
+        
+        # Ищем продукт по штрих-коду
+        result = await calorie_counter.add_meal_from_barcode(user_id, barcode_data)
+        
+        if result['success']:
+            response = f"✅ Продукт найден!\n\n"
+            response += f"📦 <b>{result['product_name']}</b>\n"
+            if result.get('brand'):
+                response += f"🏷 Бренд: {result['brand']}\n"
+            response += f"🔥 Калории: {result['calories']} ккал\n"
+            response += f"📊 Всего за сегодня: {result['total_today']} ккал"
+            
+            limit = calorie_counter.get_daily_limit(user_id)
+            if limit:
+                remaining = limit - result['total_today']
+                percentage = (result['total_today'] / limit) * 100
+                response += f"\n🎯 Осталось: {remaining} ккал ({100-percentage:.1f}%)"
+            
+            await search_msg.edit_text(response, parse_mode='HTML')
+        else:
+            await search_msg.edit_text(
+                result.get('message', '❌ Продукт не найден в базе данных. Попробуй добавить вручную, описав что ты съел.')
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при обработке фото: {e}", exc_info=True)
+        await message.answer(
+            "❌ Произошла ошибка при обработке фото.\n\n"
+            "Попробуй:\n"
+            "• Сделать фото заново\n"
+            "• Убедиться, что штрих-код четко виден\n"
+            "• Или добавь продукт вручную, описав что ты съел"
+        )
+
+
 async def handle_text(message: Message):
     """Обработка текстовых сообщений"""
     if message.chat.type == "private":
         # Обработка сообщений о еде в личке
         user_id = message.from_user.id
-        text = message.text.lower()
+        text = message.text.strip()
+        text_lower = text.lower()
+        
+        # Проверка: если сообщение состоит только из цифр (штрих-код) или штрих-код с "+" для добавления
+        barcode = None
+        add_to_diary = False
+        
+        if text.startswith('+') and text[1:].strip().isdigit():
+            barcode = text[1:].strip()
+            add_to_diary = True
+        elif text.endswith('+') and text[:-1].strip().isdigit():
+            barcode = text[:-1].strip()
+            add_to_diary = True
+        elif text.isdigit() and len(text) >= 8:  # Штрих-коды обычно от 8 до 13 цифр
+            barcode = text
+            add_to_diary = False
+        
+        if barcode:
+            try:
+                if add_to_diary:
+                    # Добавляем продукт в дневник
+                    search_msg = await message.answer("🔍 Ищу и добавляю продукт...")
+                    result = await calorie_counter.add_meal_from_barcode(user_id, barcode)
+                    
+                    if result.get('success'):
+                        product_info = result.get('product_info', {})
+                        response = f"✅ Продукт добавлен!\n\n"
+                        response += f"📦 <b>{result['product_name']}</b>\n"
+                        if result.get('brand'):
+                            response += f"🏷 Бренд: {result['brand']}\n"
+                        response += f"🔥 Калории: {result['calories']} ккал\n"
+                        response += f"📊 Всего за сегодня: {result['total_today']} ккал"
+                        
+                        # Показываем БЖУ если есть
+                        if product_info.get('proteins_per_100g') is not None:
+                            response += f"\n\n📊 <b>КБЖУ на 100г:</b>\n"
+                            if product_info.get('calories_per_100g'):
+                                response += f"🔥 Калории: {product_info['calories_per_100g']} ккал\n"
+                            response += f"🥩 Белки: {product_info['proteins_per_100g']} г\n"
+                            if product_info.get('fats_per_100g') is not None:
+                                response += f"🧈 Жиры: {product_info['fats_per_100g']} г\n"
+                            if product_info.get('carbs_per_100g') is not None:
+                                response += f"🍞 Углеводы: {product_info['carbs_per_100g']} г\n"
+                        
+                        limit = calorie_counter.get_daily_limit(user_id)
+                        if limit:
+                            remaining = limit - result['total_today']
+                            percentage = (result['total_today'] / limit) * 100
+                            response += f"\n🎯 Осталось: {remaining} ккал ({100-percentage:.1f}%)"
+                        
+                        await search_msg.edit_text(response, parse_mode='HTML')
+                    else:
+                        await search_msg.edit_text(
+                            result.get('message', '❌ Продукт не найден в базе данных.')
+                        )
+                else:
+                    # Только показываем информацию о продукте
+                    search_msg = await message.answer("🔍 Ищу продукт по штрих-коду...")
+                    product_info = await calorie_counter.get_product_info_by_barcode(barcode)
+                    
+                    if product_info.get('success'):
+                        # Формируем ответ с КБЖУ
+                        response = f"📦 <b>{product_info['name']}</b>\n"
+                        if product_info.get('brand'):
+                            response += f"🏷 Бренд: {product_info['brand']}\n"
+                        response += "\n📊 <b>КБЖУ на 100г:</b>\n"
+                        
+                        calories = product_info.get('calories_per_100g')
+                        proteins = product_info.get('proteins_per_100g')
+                        fats = product_info.get('fats_per_100g')
+                        carbs = product_info.get('carbs_per_100g')
+                        
+                        if calories:
+                            response += f"🔥 Калории: {calories} ккал\n"
+                        if proteins is not None:
+                            response += f"🥩 Белки: {proteins} г\n"
+                        if fats is not None:
+                            response += f"🧈 Жиры: {fats} г\n"
+                        if carbs is not None:
+                            response += f"🍞 Углеводы: {carbs} г\n"
+                        
+                        # Если вес продукта известен, показываем КБЖУ для всего продукта
+                        weight = product_info.get('weight')
+                        if weight:
+                            response += f"\n📏 Вес продукта: {int(weight)}г\n"
+                            response += f"<b>КБЖУ для всего продукта:</b>\n"
+                            if calories:
+                                total_cal = int((calories / 100) * weight)
+                                response += f"🔥 Калории: {total_cal} ккал\n"
+                            if proteins is not None:
+                                total_prot = round((proteins / 100) * weight, 1)
+                                response += f"🥩 Белки: {total_prot} г\n"
+                            if fats is not None:
+                                total_fats = round((fats / 100) * weight, 1)
+                                response += f"🧈 Жиры: {total_fats} г\n"
+                            if carbs is not None:
+                                total_carbs = round((carbs / 100) * weight, 1)
+                                response += f"🍞 Углеводы: {total_carbs} г\n"
+                        
+                        response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
+                        
+                        await search_msg.edit_text(response, parse_mode='HTML')
+                    else:
+                        # Пробуем найти хотя бы название продукта через другие источники
+                        await search_msg.edit_text("🔍 Ищу в других источниках...")
+                        
+                        # Пробуем еще раз через все источники
+                        product_info = await calorie_counter.get_product_info_by_barcode(barcode)
+                        
+                        if product_info.get('success'):
+                            # Если нашли хотя бы название, показываем его
+                            response = f"📦 <b>{product_info['name']}</b>\n"
+                            if product_info.get('brand'):
+                                response += f"🏷 Бренд: {product_info['brand']}\n"
+                            
+                            calories = product_info.get('calories_per_100g')
+                            proteins = product_info.get('proteins_per_100g')
+                            fats = product_info.get('fats_per_100g')
+                            carbs = product_info.get('carbs_per_100g')
+                            
+                            if calories or proteins is not None or fats is not None or carbs is not None:
+                                response += "\n📊 <b>КБЖУ на 100г:</b>\n"
+                                if calories:
+                                    response += f"🔥 Калории: {calories} ккал\n"
+                                if proteins is not None:
+                                    response += f"🥩 Белки: {proteins} г\n"
+                                if fats is not None:
+                                    response += f"🧈 Жиры: {fats} г\n"
+                                if carbs is not None:
+                                    response += f"🍞 Углеводы: {carbs} г\n"
+                            else:
+                                response += "\n⚠️ КБЖУ не найдено в базе данных.\n"
+                                response += "Можешь добавить продукт вручную, описав что ты съел.\n"
+                            
+                            if product_info.get('source'):
+                                response += f"\n📡 Источник: {product_info['source']}\n"
+                            
+                            response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
+                            
+                            await search_msg.edit_text(response, parse_mode='HTML')
+                        else:
+                            await search_msg.edit_text(
+                                f"❌ Продукт с штрих-кодом <code>{barcode}</code> не найден в базах данных.\n\n"
+                                f"Попробуй:\n"
+                                f"• Проверить правильность штрих-кода\n"
+                                f"• Или добавь продукт вручную, описав что ты съел\n"
+                                f"• Или отправь фото штрих-кода",
+                                parse_mode='HTML'
+                            )
+            except Exception as e:
+                logger.error(f"Ошибка при поиске по штрих-коду: {e}", exc_info=True)
+                await message.answer("Произошла ошибка при поиске продукта. Попробуй еще раз.")
+            return
+        
         
         # Простая проверка - если сообщение содержит слова про еду или числа с единицами измерения
-        if any(keyword in text for keyword in ['г', 'кг', 'мл', 'л', 'шт', 'калори', 'ккал', 'еда', 'съел', 'завтрак', 'обед', 'ужин']):
+        if any(keyword in text_lower for keyword in ['г', 'кг', 'мл', 'л', 'шт', 'калори', 'ккал', 'еда', 'съел', 'завтрак', 'обед', 'ужин', 'поел', 'съела', 'съел']):
             try:
-                result = calorie_counter.add_meal_from_text(user_id, message.text)
+                result = await calorie_counter.add_meal_from_text(user_id, message.text)
                 
                 if result['success']:
                     response = f"✅ Добавлено: {result['calories']} ккал\n"
@@ -665,11 +920,12 @@ async def handle_text(message: Message):
                         f"Попробуй формат:\n"
                         f"<code>овсянка 200г, банан 1шт</code>\n"
                         f"или\n"
-                        f"<code>Завтрак: яйца 2шт, хлеб 50г</code>",
+                        f"<code>Завтрак: яйца 2шт, хлеб 50г</code>\n"
+                        f"или отправь штрих-код продукта (только цифры)",
                         parse_mode='HTML'
                     )
             except Exception as e:
-                logger.error(f"Ошибка при обработке сообщения о еде: {e}")
+                logger.error(f"Ошибка при обработке сообщения о еде: {e}", exc_info=True)
                 await message.answer("Произошла ошибка. Попробуй еще раз.")
 
 
@@ -693,10 +949,26 @@ async def main():
     
     # Инициализация модулей
     db = Database()
-    # Инициализируем Motivator с API ключом из переменных окружения или используем переданный ключ
+    # Инициализируем Motivator с API ключом из переменных окружения
     groq_api_key = os.getenv("GROQ_API_KEY")
+    
+    # Инициализируем Groq клиент для использования в Motivator и CalorieCounter
+    from groq import Groq
+    groq_client = None
+    if groq_api_key:
+        try:
+            groq_client = Groq(api_key=groq_api_key)
+            logger.info("Groq клиент инициализирован для подсчета калорий")
+        except TypeError as e:
+            # Ошибка с параметрами (например, proxies) - игнорируем
+            logger.warning(f"Groq клиент недоступен из-за несовместимости версий: {e}. Подсчет калорий будет использовать базовый метод.")
+            groq_client = None
+        except Exception as e:
+            logger.warning(f"Ошибка инициализации Groq клиента: {e}. Подсчет калорий будет использовать базовый метод.")
+            groq_client = None
+    
     motivator = Motivator(api_key=groq_api_key)
-    calorie_counter = CalorieCounter()
+    calorie_counter = CalorieCounter(groq_client=groq_client)
     
     # Регистрация обработчиков
     dp.message.register(cmd_start, Command("start"))
@@ -712,6 +984,7 @@ async def main():
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_week, Command("week"))
     dp.message.register(cmd_set_limit, Command("set_limit"))
+    dp.message.register(handle_photo, F.photo)
     dp.message.register(handle_text)
     
     # Настройка планировщика для мотивирующих сообщений
