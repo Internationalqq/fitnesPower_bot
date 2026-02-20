@@ -56,6 +56,9 @@ class Database:
     
     def add_pushups(self, user_id: int, username: str, count: int, chat_id: int):
         """Добавление отжиманий (обновляет запись за сегодня, если есть, иначе создаёт новую)"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         conn = self.get_connection()
         cursor = conn.cursor()
         
@@ -75,18 +78,23 @@ class Database:
                 UPDATE pushups SET count = ?, username = ?
                 WHERE id = ?
             """, (new_count, username, existing['id']))
+            logger.info(f"Обновлена запись отжиманий: user_id={user_id}, chat_id={chat_id}, old_count={existing['count']}, new_count={new_count}")
         else:
-            # Создаём новую запись
+            # Создаём новую запись (даже если count=0, чтобы пользователь попал в список)
             cursor.execute("""
                 INSERT INTO pushups (user_id, username, chat_id, count, date)
                 VALUES (?, ?, ?, ?, ?)
             """, (user_id, username, chat_id, count, today))
+            logger.info(f"Создана новая запись отжиманий: user_id={user_id}, chat_id={chat_id}, count={count}, date={today}")
         
         conn.commit()
         conn.close()
     
     def add_abs(self, user_id: int, username: str, count: int, chat_id: int):
         """Добавление упражнений на пресс (обновляет запись за сегодня, если есть, иначе создаёт новую)"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         conn = self.get_connection()
         cursor = conn.cursor()
         
@@ -106,12 +114,14 @@ class Database:
                 UPDATE abs SET count = ?, username = ?
                 WHERE id = ?
             """, (new_count, username, existing['id']))
+            logger.info(f"Обновлена запись пресса: user_id={user_id}, chat_id={chat_id}, old_count={existing['count']}, new_count={new_count}")
         else:
-            # Создаём новую запись
+            # Создаём новую запись (даже если count=0, чтобы пользователь попал в список)
             cursor.execute("""
                 INSERT INTO abs (user_id, username, chat_id, count, date)
                 VALUES (?, ?, ?, ?, ?)
             """, (user_id, username, chat_id, count, today))
+            logger.info(f"Создана новая запись пресса: user_id={user_id}, chat_id={chat_id}, count={count}, date={today}")
         
         conn.commit()
         conn.close()

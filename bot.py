@@ -503,12 +503,25 @@ async def cmd_otzhimaniya(message: Message):
         
         if count == 0:
             # Регистрация в списке: одна запись в оба типа, чтобы попал в отчёт
-            db.add_pushups(user_id, username, 0, message.chat.id)
-            db.add_abs(user_id, username, 0, message.chat.id)
-            await message.answer(
-                f"✅ {user_name}, ты в списке! С завтра будешь в утреннем отчёте с нормой 80 отжиманий и 80 пресса.",
-                reply_to_message_id=message.message_id
-            )
+            try:
+                db.add_pushups(user_id, username, 0, message.chat.id)
+                db.add_abs(user_id, username, 0, message.chat.id)
+                
+                # Проверяем, что записи действительно созданы
+                pushups_today = db.get_user_pushups_today(user_id, message.chat.id)
+                abs_today = db.get_user_abs_today(user_id, message.chat.id)
+                logger.info(f"Регистрация пользователя: user_id={user_id}, chat_id={message.chat.id}, pushups_today={pushups_today}, abs_today={abs_today}")
+                
+                await message.answer(
+                    f"✅ {user_name}, ты в списке! С завтра будешь в утреннем отчёте с нормой 80 отжиманий и 80 пресса.",
+                    reply_to_message_id=message.message_id
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при регистрации пользователя {user_id} в чате {message.chat.id}: {e}", exc_info=True)
+                await message.answer(
+                    f"❌ Произошла ошибка при регистрации. Попробуй еще раз.",
+                    reply_to_message_id=message.message_id
+                )
             return
         
         # «Сделал N» = вычитаем N из долга
@@ -551,12 +564,26 @@ async def cmd_press(message: Message):
             user_name += f" {message.from_user.last_name}"
         
         if count == 0:
-            db.add_pushups(user_id, username, 0, message.chat.id)
-            db.add_abs(user_id, username, 0, message.chat.id)
-            await message.answer(
-                f"✅ {user_name}, ты в списке! С завтра будешь в утреннем отчёте с нормой 80 отжиманий и 80 пресса.",
-                reply_to_message_id=message.message_id
-            )
+            # Регистрация в списке: одна запись в оба типа, чтобы попал в отчёт
+            try:
+                db.add_pushups(user_id, username, 0, message.chat.id)
+                db.add_abs(user_id, username, 0, message.chat.id)
+                
+                # Проверяем, что записи действительно созданы
+                pushups_today = db.get_user_pushups_today(user_id, message.chat.id)
+                abs_today = db.get_user_abs_today(user_id, message.chat.id)
+                logger.info(f"Регистрация пользователя: user_id={user_id}, chat_id={message.chat.id}, pushups_today={pushups_today}, abs_today={abs_today}")
+                
+                await message.answer(
+                    f"✅ {user_name}, ты в списке! С завтра будешь в утреннем отчёте с нормой 80 отжиманий и 80 пресса.",
+                    reply_to_message_id=message.message_id
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при регистрации пользователя {user_id} в чате {message.chat.id}: {e}", exc_info=True)
+                await message.answer(
+                    f"❌ Произошла ошибка при регистрации. Попробуй еще раз.",
+                    reply_to_message_id=message.message_id
+                )
             return
         
         db.add_abs(user_id, username, -count, message.chat.id)
