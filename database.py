@@ -55,29 +55,63 @@ class Database:
         conn.close()
     
     def add_pushups(self, user_id: int, username: str, count: int, chat_id: int):
-        """Добавление отжиманий"""
+        """Добавление отжиманий (обновляет запись за сегодня, если есть, иначе создаёт новую)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         today = date.today()
+        # Проверяем, есть ли запись за сегодня
         cursor.execute("""
-            INSERT INTO pushups (user_id, username, chat_id, count, date)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, username, chat_id, count, today))
+            SELECT id, count FROM pushups
+            WHERE user_id = ? AND chat_id = ? AND date = ?
+            LIMIT 1
+        """, (user_id, chat_id, today))
+        
+        existing = cursor.fetchone()
+        if existing:
+            # Обновляем существующую запись: count = count + новое значение
+            new_count = existing['count'] + count
+            cursor.execute("""
+                UPDATE pushups SET count = ?, username = ?
+                WHERE id = ?
+            """, (new_count, username, existing['id']))
+        else:
+            # Создаём новую запись
+            cursor.execute("""
+                INSERT INTO pushups (user_id, username, chat_id, count, date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, username, chat_id, count, today))
         
         conn.commit()
         conn.close()
     
     def add_abs(self, user_id: int, username: str, count: int, chat_id: int):
-        """Добавление упражнений на пресс"""
+        """Добавление упражнений на пресс (обновляет запись за сегодня, если есть, иначе создаёт новую)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
         today = date.today()
+        # Проверяем, есть ли запись за сегодня
         cursor.execute("""
-            INSERT INTO abs (user_id, username, chat_id, count, date)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_id, username, chat_id, count, today))
+            SELECT id, count FROM abs
+            WHERE user_id = ? AND chat_id = ? AND date = ?
+            LIMIT 1
+        """, (user_id, chat_id, today))
+        
+        existing = cursor.fetchone()
+        if existing:
+            # Обновляем существующую запись: count = count + новое значение
+            new_count = existing['count'] + count
+            cursor.execute("""
+                UPDATE abs SET count = ?, username = ?
+                WHERE id = ?
+            """, (new_count, username, existing['id']))
+        else:
+            # Создаём новую запись
+            cursor.execute("""
+                INSERT INTO abs (user_id, username, chat_id, count, date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, username, chat_id, count, today))
         
         conn.commit()
         conn.close()
@@ -115,6 +149,34 @@ class Database:
         conn.close()
         
         return result['total'] if result['total'] else 0
+    
+    def get_user_pushups_debt(self, user_id: int, chat_id: int) -> int:
+        """Получение долга по отжиманиям (сумма всех count за все дни, если > 0)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT SUM(count) as total
+            FROM pushups
+            WHERE user_id = ? AND chat_id = ?
+        """, (user_id, chat_id))
+        result = cursor.fetchone()
+        conn.close()
+        total = result['total'] if result['total'] else 0
+        return max(0, total)
+    
+    def get_user_abs_debt(self, user_id: int, chat_id: int) -> int:
+        """Получение долга по прессу (сумма всех count за все дни, если > 0)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT SUM(count) as total
+            FROM abs
+            WHERE user_id = ? AND chat_id = ?
+        """, (user_id, chat_id))
+        result = cursor.fetchone()
+        conn.close()
+        total = result['total'] if result['total'] else 0
+        return max(0, total)
     
     def get_group_stats_today(self, chat_id: int) -> List[Dict]:
         """Получение статистики группы за сегодня"""
@@ -334,3 +396,53 @@ class Database:
         
         conn.close()
         return stats
+
+    def get_all_chat_participants(self, chat_id: int) -> List[Dict]:
+        """Все пользователи, которые когда-либо делали отжимания/пресс в этом чате (user_id, username)."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT user_id, MAX(username) as username FROM (
+                SELECT user_id, username FROM pushups WHERE chat_id = ?
+                UNION ALL
+                SELECT user_id, username FROM abs WHERE chat_id = ?
+            ) GROUP BY user_id
+        """, (chat_id, chat_id))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'user_id': row['user_id'], 'username': row['username'] or ''} for row in rows]
+
+    def get_active_chat_participants(self, chat_id: int, days: int = 7) -> List[Dict]:
+        """Участники, у которых есть хотя бы одна запись отжиманий или пресса за последние days дней."""
+        from datetime import timedelta
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        since = date.today() - timedelta(days=days)
+        cursor.execute("""
+            SELECT user_id, MAX(username) as username FROM (
+                SELECT user_id, username FROM pushups WHERE chat_id = ? AND date >= ?
+                UNION ALL
+                SELECT user_id, username FROM abs WHERE chat_id = ? AND date >= ?
+            ) GROUP BY user_id
+        """, (chat_id, since, chat_id, since))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'user_id': row['user_id'], 'username': row['username'] or ''} for row in rows]
+
+    def get_chat_first_activity_date(self, chat_id: int) -> Optional[date]:
+        """Дата первой активности в чате (первая запись отжиманий или пресса)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT MIN(d) as first_date FROM (
+                SELECT date as d FROM pushups WHERE chat_id = ?
+                UNION ALL
+                SELECT date as d FROM abs WHERE chat_id = ?
+            )
+        """, (chat_id, chat_id))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row['first_date']:
+            d = row['first_date']
+            return d if isinstance(d, date) else date.fromisoformat(str(d))
+        return None

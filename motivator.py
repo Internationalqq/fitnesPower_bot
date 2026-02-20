@@ -11,15 +11,10 @@ class Motivator:
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
         if self.api_key:
             try:
-                # Пробуем создать клиент без дополнительных параметров
+                # Инициализируем Groq клиент (в версии 1.0.0 проблема с proxies решена)
                 self.client = Groq(api_key=self.api_key)
                 self.use_groq = True
                 logger.info("Groq API инициализирован")
-            except TypeError as e:
-                # Ошибка с параметрами (например, proxies) - игнорируем, используем fallback
-                logger.warning(f"Groq API недоступен из-за несовместимости версий: {e}. Используются статические сообщения.")
-                self.use_groq = False
-                self.client = None
             except Exception as e:
                 logger.warning(f"Ошибка инициализации Groq: {e}. Используются статические сообщения.")
                 self.use_groq = False
