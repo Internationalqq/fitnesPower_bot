@@ -1367,48 +1367,67 @@ async def handle_text(message: Message):
                     product_info = await calorie_counter.get_product_info_by_barcode(barcode, status_callback=update_status)
                     
                     if product_info.get('success'):
-                        # Формируем ответ с КБЖУ
-                        response = f"📦 <b>{product_info['name']}</b>\n"
-                        if product_info.get('brand'):
-                            response += f"🏷 Бренд: {product_info['brand']}\n"
-                        response += "\n📊 <b>КБЖУ на 100г:</b>\n"
-                        
-                        calories = product_info.get('calories_per_100g')
-                        proteins = product_info.get('proteins_per_100g')
-                        fats = product_info.get('fats_per_100g')
-                        carbs = product_info.get('carbs_per_100g')
-                        
-                        if calories:
-                            response += f"🔥 Калории: {calories} ккал\n"
-                        if proteins is not None:
-                            response += f"🥩 Белки: {proteins} г\n"
-                        if fats is not None:
-                            response += f"🧈 Жиры: {fats} г\n"
-                        if carbs is not None:
-                            response += f"🍞 Углеводы: {carbs} г\n"
-                        
-                        # Если вес продукта известен, показываем КБЖУ для всего продукта
-                        weight = product_info.get('weight')
-                        if weight:
-                            response += f"\n📏 Вес продукта: {int(weight)}г\n"
-                            response += f"<b>КБЖУ для всего продукта:</b>\n"
-                            if calories:
-                                total_cal = int((calories / 100) * weight)
-                                response += f"🔥 Калории: {total_cal} ккал\n"
-                            if proteins is not None:
-                                total_prot = round((proteins / 100) * weight, 1)
-                                response += f"🥩 Белки: {total_prot} г\n"
-                            if fats is not None:
-                                total_fats = round((fats / 100) * weight, 1)
-                                response += f"🧈 Жиры: {total_fats} г\n"
-                            if carbs is not None:
-                                total_carbs = round((carbs / 100) * weight, 1)
-                                response += f"🍞 Углеводы: {total_carbs} г\n"
-                        
-                        response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
-                        
-                        await search_msg.edit_text(response, parse_mode='HTML')
-                    else:
+                        # Проверяем, что название продукта валидное и не пустое
+                        product_name = product_info.get('name', '').strip()
+                        if not product_name or product_name.lower() in ['поиск', 'search', 'product', 'товар', 'неизвестный', 'unknown']:
+                            # Если название невалидное, пробуем найти в других источниках
+                            logger.warning(f"Найдено невалидное название продукта: {product_name}, продолжаем поиск")
+                            product_info = None
+                        else:
+                            # Формируем ответ с КБЖУ
+                            response = f"📦 <b>{product_name}</b>\n"
+                            if product_info.get('brand'):
+                                response += f"🏷 Бренд: {product_info['brand']}\n"
+                            
+                            calories = product_info.get('calories_per_100g')
+                            proteins = product_info.get('proteins_per_100g')
+                            fats = product_info.get('fats_per_100g')
+                            carbs = product_info.get('carbs_per_100g')
+                            
+                            # Показываем КБЖУ только если есть хотя бы одно значение
+                            if calories or proteins is not None or fats is not None or carbs is not None:
+                                response += "\n📊 <b>КБЖУ на 100г:</b>\n"
+                                if calories:
+                                    response += f"🔥 Калории: {calories} ккал\n"
+                                if proteins is not None:
+                                    response += f"🥩 Белки: {proteins} г\n"
+                                if fats is not None:
+                                    response += f"🧈 Жиры: {fats} г\n"
+                                if carbs is not None:
+                                    response += f"🍞 Углеводы: {carbs} г\n"
+                                
+                                # Если вес продукта известен, показываем КБЖУ для всего продукта
+                                weight = product_info.get('weight')
+                                if weight:
+                                    response += f"\n📏 Вес продукта: {int(weight)}г\n"
+                                    response += f"<b>КБЖУ для всего продукта:</b>\n"
+                                    if calories:
+                                        total_cal = int((calories / 100) * weight)
+                                        response += f"🔥 Калории: {total_cal} ккал\n"
+                                    if proteins is not None:
+                                        total_prot = round((proteins / 100) * weight, 1)
+                                        response += f"🥩 Белки: {total_prot} г\n"
+                                    if fats is not None:
+                                        total_fats = round((fats / 100) * weight, 1)
+                                        response += f"🧈 Жиры: {total_fats} г\n"
+                                    if carbs is not None:
+                                        total_carbs = round((carbs / 100) * weight, 1)
+                                        response += f"🍞 Углеводы: {total_carbs} г\n"
+                            else:
+                                # Если КБЖУ нет, но название есть
+                                response += "\n⚠️ КБЖУ не найдено в базе данных.\n"
+                                response += "Можешь добавить продукт вручную, описав что ты съел.\n"
+                            
+                            if product_info.get('source'):
+                                response += f"\n📡 Источник: {product_info['source']}\n"
+                            
+                            response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
+                            
+                            await search_msg.edit_text(response, parse_mode='HTML')
+                            return
+                    
+                    # Если не нашли или название невалидное, пробуем найти в других источниках
+                    if not product_info or not product_info.get('success'):
                         # Пробуем найти хотя бы название продукта через другие источники
                         await search_msg.edit_text("🔍 Ищу в других источниках...")
                         
@@ -1422,37 +1441,48 @@ async def handle_text(message: Message):
                         # Пробуем еще раз через все источники
                         product_info = await calorie_counter.get_product_info_by_barcode(barcode, status_callback=update_status_retry)
                         
-                        if product_info.get('success'):
-                            # Если нашли хотя бы название, показываем его
-                            response = f"📦 <b>{product_info['name']}</b>\n"
-                            if product_info.get('brand'):
-                                response += f"🏷 Бренд: {product_info['brand']}\n"
-                            
-                            calories = product_info.get('calories_per_100g')
-                            proteins = product_info.get('proteins_per_100g')
-                            fats = product_info.get('fats_per_100g')
-                            carbs = product_info.get('carbs_per_100g')
-                            
-                            if calories or proteins is not None or fats is not None or carbs is not None:
-                                response += "\n📊 <b>КБЖУ на 100г:</b>\n"
-                                if calories:
-                                    response += f"🔥 Калории: {calories} ккал\n"
-                                if proteins is not None:
-                                    response += f"🥩 Белки: {proteins} г\n"
-                                if fats is not None:
-                                    response += f"🧈 Жиры: {fats} г\n"
-                                if carbs is not None:
-                                    response += f"🍞 Углеводы: {carbs} г\n"
+                        if product_info and product_info.get('success'):
+                            product_name = product_info.get('name', '').strip()
+                            if product_name and product_name.lower() not in ['поиск', 'search', 'product', 'товар', 'неизвестный', 'unknown']:
+                                # Если нашли хотя бы название, показываем его
+                                response = f"📦 <b>{product_name}</b>\n"
+                                if product_info.get('brand'):
+                                    response += f"🏷 Бренд: {product_info['brand']}\n"
+                                
+                                calories = product_info.get('calories_per_100g')
+                                proteins = product_info.get('proteins_per_100g')
+                                fats = product_info.get('fats_per_100g')
+                                carbs = product_info.get('carbs_per_100g')
+                                
+                                if calories or proteins is not None or fats is not None or carbs is not None:
+                                    response += "\n📊 <b>КБЖУ на 100г:</b>\n"
+                                    if calories:
+                                        response += f"🔥 Калории: {calories} ккал\n"
+                                    if proteins is not None:
+                                        response += f"🥩 Белки: {proteins} г\n"
+                                    if fats is not None:
+                                        response += f"🧈 Жиры: {fats} г\n"
+                                    if carbs is not None:
+                                        response += f"🍞 Углеводы: {carbs} г\n"
+                                else:
+                                    response += "\n⚠️ КБЖУ не найдено в базе данных.\n"
+                                    response += "Можешь добавить продукт вручную, описав что ты съел.\n"
+                                
+                                if product_info.get('source'):
+                                    response += f"\n📡 Источник: {product_info['source']}\n"
+                                
+                                response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
+                                
+                                await search_msg.edit_text(response, parse_mode='HTML')
                             else:
-                                response += "\n⚠️ КБЖУ не найдено в базе данных.\n"
-                                response += "Можешь добавить продукт вручную, описав что ты съел.\n"
-                            
-                            if product_info.get('source'):
-                                response += f"\n📡 Источник: {product_info['source']}\n"
-                            
-                            response += f"\n💡 Напиши <code>+{barcode}</code> чтобы добавить этот продукт в дневник"
-                            
-                            await search_msg.edit_text(response, parse_mode='HTML')
+                                await search_msg.edit_text(
+                                    f"❌ Продукт с штрих-кодом <code>{barcode}</code> не найден в базах данных.\n\n"
+                                    f"Попробуй:\n"
+                                    f"• Проверить правильность штрих-кода\n"
+                                    f"• Или добавь продукт вручную, описав что ты съел\n"
+                                    f"• Или отправь фото штрих-кода",
+                                    parse_mode='HTML'
+                                )
                         else:
                             await search_msg.edit_text(
                                 f"❌ Продукт с штрих-кодом <code>{barcode}</code> не найден в базах данных.\n\n"

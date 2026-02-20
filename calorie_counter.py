@@ -1192,12 +1192,26 @@ class CalorieCounter:
             barcode: Штрих-код продукта
             status_callback: Функция для отправки статуса поиска (принимает строку с сообщением)
         """
+        def is_valid_result(result: Optional[Dict]) -> bool:
+            """Проверка валидности результата поиска"""
+            if not result or not result.get('success'):
+                return False
+            name = result.get('name', '').strip()
+            if not name:
+                return False
+            # Проверяем, что название не является служебным словом
+            invalid_names = ['поиск', 'search', 'product', 'товар', 'неизвестный', 'unknown', 'barcode', 'штрих-код']
+            if name.lower() in invalid_names:
+                return False
+            # Проверяем валидность через функцию is_valid_product_name
+            return is_valid_product_name(name)
+        
         # Пробуем сначала Open Food Facts API (самый надежный источник с КБЖУ)
         if status_callback:
             await status_callback("🔍 Ищу в Open Food Facts API...")
         logger.info(f"Ищу продукт {barcode} в Open Food Facts API...")
         result = await self.search_product_by_barcode_openfoodfacts(barcode)
-        if result and result.get('success'):
+        if is_valid_result(result):
             logger.info(f"Продукт найден в Open Food Facts API")
             return result
         
@@ -1206,7 +1220,7 @@ class CalorieCounter:
             await status_callback("🔍 Ищу в UPCitemdb...")
         logger.info(f"Продукт не найден в Open Food Facts API, пробуем UPCitemdb...")
         result = await self.search_product_by_barcode_upcitemdb(barcode)
-        if result and result.get('success'):
+        if is_valid_result(result):
             logger.info(f"Продукт найден в UPCitemdb")
             return result
         
@@ -1215,7 +1229,7 @@ class CalorieCounter:
             await status_callback("🔍 Ищу в Barcode Lookup...")
         logger.info(f"Пробуем Barcode Lookup...")
         result = await self.search_product_by_barcode_barcodelookup(barcode)
-        if result and result.get('success'):
+        if is_valid_result(result):
             logger.info(f"Продукт найден в Barcode Lookup")
             return result
         
@@ -1224,7 +1238,7 @@ class CalorieCounter:
             await status_callback("🔍 Ищу на сайте Open Food Facts...")
         logger.info(f"Пробуем веб-поиск через Open Food Facts...")
         result = await self.search_product_by_barcode_web(barcode)
-        if result and result.get('success'):
+        if is_valid_result(result):
             logger.info(f"Продукт найден через веб-поиск Open Food Facts")
             return result
         
@@ -1233,7 +1247,7 @@ class CalorieCounter:
             await status_callback("🔍 Ищу в российских базах данных...")
         logger.info(f"Пробуем поиск через другие веб-источники...")
         result = await self.search_product_by_barcode_web_alternative(barcode)
-        if result and result.get('success'):
+        if is_valid_result(result):
             logger.info(f"Продукт найден через альтернативные веб-источники")
             return result
         
@@ -1258,29 +1272,47 @@ class CalorieCounter:
                         if response.status == 200:
                             html = await response.text()
                             
-                            # Ищем название продукта
+                            # Ищем название продукта - пробуем разные паттерны
                             name_patterns = [
                                 r'<h1[^>]*>([^<]+)</h1>',
                                 r'<title>([^<]+)</title>',
                                 r'product[_-]?name["\']?\s*:\s*["\']([^"\']+)["\']',
                                 r'название[^>]*>([^<]+)',
                                 r'<div[^>]*class=["\'][^"\']*name[^"\']*["\'][^>]*>([^<]+)</div>',
+                                r'<td[^>]*>Название[^<]*</td>\s*<td[^>]*>([^<]+)</td>',
+                                r'<span[^>]*>([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z0-9\s\-]{3,})</span>',
+                                r'<p[^>]*>([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z0-9\s\-]{3,})</p>',
                             ]
                             
                             product_name = None
                             brand = None
                             weight = None
                             
+                            # Сначала пробуем найти в структурированных данных
                             for pattern in name_patterns:
-                                name_match = re.search(pattern, html, re.IGNORECASE)
+                                name_match = re.search(pattern, html, re.IGNORECASE | re.MULTILINE)
                                 if name_match:
-                                    product_name = name_match.group(1).strip()
-                                    product_name = re.sub(r'\s*-\s*EAN.*$', '', product_name, flags=re.IGNORECASE)
-                                    product_name = re.sub(r'\s*-\s*.*$', '', product_name, flags=re.IGNORECASE)
-                                    if is_valid_product_name(product_name):
+                                    candidate_name = name_match.group(1).strip()
+                                    # Очищаем от лишнего
+                                    candidate_name = re.sub(r'\s*-\s*EAN.*$', '', candidate_name, flags=re.IGNORECASE)
+                                    candidate_name = re.sub(r'\s*-\s*ean-online.*$', '', candidate_name, flags=re.IGNORECASE)
+                                    candidate_name = re.sub(r'\s*-\s*.*$', '', candidate_name, flags=re.IGNORECASE)
+                                    candidate_name = re.sub(r'^\d+\s*', '', candidate_name)  # Убираем штрих-код в начале
+                                    candidate_name = candidate_name.strip()
+                                    
+                                    if candidate_name and is_valid_product_name(candidate_name):
+                                        product_name = candidate_name
                                         break
-                                    else:
-                                        product_name = None
+                            
+                            # Если не нашли структурированно, пробуем найти любое осмысленное название
+                            if not product_name:
+                                # Ищем текст, который похож на название продукта (содержит буквы, не слишком короткий)
+                                text_matches = re.findall(r'>([А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z0-9\s\-]{5,50})<', html)
+                                for match in text_matches:
+                                    candidate = match.strip()
+                                    if is_valid_product_name(candidate) and len(candidate) > 5:
+                                        product_name = candidate
+                                        break
                             
                             # Пробуем извлечь вес из названия или страницы
                             if product_name:
