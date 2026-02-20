@@ -223,8 +223,8 @@ async def setup_scheduler():
     scheduler.add_job(
         send_daily_summary_to_all_chats,
         'cron',
-        hour=0,
-        minute=38,
+        hour=8,
+        minute=00,
         id='daily_summary'
     )
     
