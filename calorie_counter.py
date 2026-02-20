@@ -1251,7 +1251,45 @@ class CalorieCounter:
             logger.info(f"Продукт найден через альтернативные веб-источники")
             return result
         
-        # Если ничего не нашли, возвращаем None (Groq не используем для штрих-кодов, так как дает неточные данные)
+        # Если ничего не нашли, пробуем использовать Groq как последний вариант
+        # (только если все остальные источники не сработали)
+        if self.groq_client:
+            if status_callback:
+                await status_callback("🔍 Ищу через AI...")
+            logger.info(f"Все источники не сработали, пробуем Groq для штрих-кода {barcode}")
+            try:
+                # Пробуем найти информацию о продукте через Groq
+                groq_prompt = f"Найди информацию о продукте со штрих-кодом {barcode}. Верни только название продукта на русском языке. Если не можешь найти - верни пустую строку."
+                response = self.groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": "Ты помощник для поиска информации о продуктах. Отвечай только названием продукта на русском языке или пустой строкой, если не можешь найти."},
+                        {"role": "user", "content": groq_prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=50
+                )
+                product_name = response.choices[0].message.content.strip()
+                
+                if product_name and is_valid_product_name(product_name) and len(product_name) > 3:
+                    logger.info(f"Groq нашел название продукта: {product_name}")
+                    return {
+                        'success': True,
+                        'name': product_name,
+                        'calories_per_100g': None,
+                        'proteins_per_100g': None,
+                        'fats_per_100g': None,
+                        'carbs_per_100g': None,
+                        'weight': None,
+                        'barcode': barcode,
+                        'brand': '',
+                        'image_url': None,
+                        'source': 'Groq AI (по штрих-коду)'
+                    }
+            except Exception as e:
+                logger.debug(f"Ошибка при использовании Groq для штрих-кода: {e}")
+        
+        # Если ничего не нашли, возвращаем None
         logger.warning(f"Продукт с штрих-кодом {barcode} не найден ни в одном источнике")
         return None
     
@@ -1560,7 +1598,8 @@ class CalorieCounter:
                     logger.debug(f"Ошибка при поиске в barcode-list.com: {e}")
                 
                 # Пробуем через поиск в Яндекс (лучше для российских товаров)
-                search_url = f"https://yandex.ru/search/?text={barcode}"
+                # Используем более специфичный запрос для поиска товара
+                search_url = f"https://yandex.ru/search/?text={barcode}+товар+купить"
                 try:
                     async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
                         if response.status == 200:
@@ -1571,21 +1610,30 @@ class CalorieCounter:
                                 r'<h2[^>]*class=["\'][^"\']*organic__title[^"\']*["\'][^>]*>([^<]+)</h2>',
                                 r'<a[^>]*class=["\'][^"\']*organic__url[^"\']*["\'][^>]*>([^<]+)</a>',
                                 r'<h2[^>]*>([^<]+)</h2>',
+                                r'<span[^>]*class=["\'][^"\']*organic__url-text[^"\']*["\'][^>]*>([^<]+)</span>',
+                                r'<div[^>]*class=["\'][^"\']*serp-item[^"\']*["\'][^>]*>.*?<h2[^>]*>([^<]+)</h2>',
                             ]
                             
                             product_name = None
                             for pattern in name_patterns:
-                                matches = re.findall(pattern, html, re.IGNORECASE)
-                                for match in matches[:5]:  # Проверяем первые 5 результатов
+                                matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+                                for match in matches[:10]:  # Проверяем первые 10 результатов
                                     name = match.strip()
                                     # Очищаем от HTML-сущностей и лишнего
                                     name = re.sub(r'&[a-z]+;', '', name)
                                     name = re.sub(r'&nbsp;', ' ', name)
+                                    name = re.sub(r'&quot;', '"', name)
+                                    name = re.sub(r'&amp;', '&', name)
                                     name = re.sub(r'\s+', ' ', name).strip()
+                                    # Убираем ссылки на магазины и лишнее
+                                    name = re.sub(r'\s*-\s*[А-Яа-яЁёA-Za-z\s]+\.ru.*$', '', name, flags=re.IGNORECASE)
+                                    name = re.sub(r'\s*-\s*купить.*$', '', name, flags=re.IGNORECASE)
+                                    name = re.sub(r'\s*-\s*цена.*$', '', name, flags=re.IGNORECASE)
                                     # Фильтруем результаты поиска Яндекс
-                                    if is_valid_product_name(name) and 'яндекс' not in name.lower():
-                                        product_name = name
-                                        break
+                                    if is_valid_product_name(name) and len(name) > 5:
+                                        if 'яндекс' not in name.lower() and 'yandex' not in name.lower():
+                                            product_name = name
+                                            break
                                 if product_name:
                                     break
                             
@@ -1607,8 +1655,8 @@ class CalorieCounter:
                 except Exception as e:
                     logger.debug(f"Ошибка при поиске в Яндекс: {e}")
                 
-                # Пробуем через поиск в Google
-                search_url = f"https://www.google.com/search?q={barcode}"
+                # Пробуем через поиск в Google с более специфичным запросом
+                search_url = f"https://www.google.com/search?q={barcode}+product+купить"
                 try:
                     async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
                         if response.status == 200:
@@ -1619,20 +1667,29 @@ class CalorieCounter:
                             name_patterns = [
                                 r'<h3[^>]*>([^<]+)</h3>',
                                 r'<a[^>]*><h3[^>]*>([^<]+)</h3></a>',
+                                r'<div[^>]*class=["\'][^"\']*g[^"\']*["\'][^>]*>.*?<h3[^>]*>([^<]+)</h3>',
                             ]
                             
                             product_name = None
                             for pattern in name_patterns:
-                                matches = re.findall(pattern, html, re.IGNORECASE)
-                                for match in matches[:5]:  # Проверяем первые 5 результатов
+                                matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+                                for match in matches[:10]:  # Проверяем первые 10 результатов
                                     name = match.strip()
                                     # Очищаем от HTML-сущностей и лишнего
                                     name = re.sub(r'&[a-z]+;', '', name)
+                                    name = re.sub(r'&nbsp;', ' ', name)
+                                    name = re.sub(r'&quot;', '"', name)
+                                    name = re.sub(r'&amp;', '&', name)
                                     name = re.sub(r'\s+', ' ', name).strip()
+                                    # Убираем ссылки на магазины и лишнее
+                                    name = re.sub(r'\s*-\s*[А-Яа-яЁёA-Za-z\s]+\.ru.*$', '', name, flags=re.IGNORECASE)
+                                    name = re.sub(r'\s*-\s*купить.*$', '', name, flags=re.IGNORECASE)
+                                    name = re.sub(r'\s*-\s*цена.*$', '', name, flags=re.IGNORECASE)
                                     # Фильтруем результаты поиска Google
-                                    if is_valid_product_name(name) and 'google' not in name.lower():
-                                        product_name = name
-                                        break
+                                    if is_valid_product_name(name) and len(name) > 5:
+                                        if 'google' not in name.lower() and 'поиск' not in name.lower():
+                                            product_name = name
+                                            break
                                 if product_name:
                                     break
                             
