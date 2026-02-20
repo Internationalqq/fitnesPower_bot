@@ -1228,9 +1228,9 @@ class CalorieCounter:
             logger.info(f"Продукт найден через веб-поиск Open Food Facts")
             return result
         
-        # Пробуем поиск через другие веб-источники
+        # Пробуем поиск через другие веб-источники (российские базы и поисковики)
         if status_callback:
-            await status_callback("🔍 Ищу в других веб-источниках...")
+            await status_callback("🔍 Ищу в российских базах данных...")
         logger.info(f"Пробуем поиск через другие веб-источники...")
         result = await self.search_product_by_barcode_web_alternative(barcode)
         if result and result.get('success'):
@@ -1247,10 +1247,198 @@ class CalorieCounter:
             import re
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
             
             async with aiohttp.ClientSession() as session:
+                # Пробуем через ean-online.ru (более 27 млн товаров)
+                url = f"https://ean-online.ru/{barcode}"
+                try:
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            html = await response.text()
+                            
+                            # Ищем название продукта
+                            name_patterns = [
+                                r'<h1[^>]*>([^<]+)</h1>',
+                                r'<title>([^<]+)</title>',
+                                r'product[_-]?name["\']?\s*:\s*["\']([^"\']+)["\']',
+                                r'название[^>]*>([^<]+)',
+                                r'<div[^>]*class=["\'][^"\']*name[^"\']*["\'][^>]*>([^<]+)</div>',
+                            ]
+                            
+                            product_name = None
+                            brand = None
+                            weight = None
+                            
+                            for pattern in name_patterns:
+                                name_match = re.search(pattern, html, re.IGNORECASE)
+                                if name_match:
+                                    product_name = name_match.group(1).strip()
+                                    product_name = re.sub(r'\s*-\s*EAN.*$', '', product_name, flags=re.IGNORECASE)
+                                    product_name = re.sub(r'\s*-\s*.*$', '', product_name, flags=re.IGNORECASE)
+                                    if is_valid_product_name(product_name):
+                                        break
+                                    else:
+                                        product_name = None
+                            
+                            # Пробуем извлечь вес из названия или страницы
+                            if product_name:
+                                weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', product_name, re.IGNORECASE)
+                                if weight_match:
+                                    weight = float(weight_match.group(1))
+                                    unit = weight_match.group(2).lower()
+                                    if unit in ['кг', 'kg']:
+                                        weight *= 1000
+                            
+                            # Ищем бренд
+                            brand_patterns = [
+                                r'бренд[^>]*>([^<]+)',
+                                r'brand["\']?\s*:\s*["\']([^"\']+)["\']',
+                                r'производитель[^>]*>([^<]+)',
+                            ]
+                            for pattern in brand_patterns:
+                                brand_match = re.search(pattern, html, re.IGNORECASE)
+                                if brand_match:
+                                    brand = brand_match.group(1).strip()
+                                    if brand and len(brand) > 2:
+                                        break
+                            
+                            if product_name and is_valid_product_name(product_name):
+                                logger.info(f"Продукт найден на ean-online.ru: {product_name}")
+                                return {
+                                    'success': True,
+                                    'name': product_name,
+                                    'calories_per_100g': None,
+                                    'proteins_per_100g': None,
+                                    'fats_per_100g': None,
+                                    'carbs_per_100g': None,
+                                    'weight': weight,
+                                    'barcode': barcode,
+                                    'brand': brand or '',
+                                    'image_url': None,
+                                    'source': 'EAN-Online.ru'
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в ean-online.ru: {e}")
+                
+                # Пробуем через barcode-list.ru
+                url = f"https://barcode-list.ru/barcode/{barcode}.htm"
+                try:
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            html = await response.text()
+                            
+                            name_patterns = [
+                                r'<h1[^>]*>([^<]+)</h1>',
+                                r'<title>([^<]+)</title>',
+                                r'Product Name[^>]*>([^<]+)',
+                            ]
+                            
+                            product_name = None
+                            for pattern in name_patterns:
+                                name_match = re.search(pattern, html, re.IGNORECASE)
+                                if name_match:
+                                    product_name = name_match.group(1).strip()
+                                    product_name = re.sub(r'\s*-\s*Barcode.*$', '', product_name, flags=re.IGNORECASE)
+                                    product_name = re.sub(r'\s*-\s*.*$', '', product_name, flags=re.IGNORECASE)
+                                    if is_valid_product_name(product_name):
+                                        break
+                                    else:
+                                        product_name = None
+                            
+                            if product_name and is_valid_product_name(product_name):
+                                logger.info(f"Продукт найден на barcode-list.ru: {product_name}")
+                                return {
+                                    'success': True,
+                                    'name': product_name,
+                                    'calories_per_100g': None,
+                                    'proteins_per_100g': None,
+                                    'fats_per_100g': None,
+                                    'carbs_per_100g': None,
+                                    'weight': None,
+                                    'barcode': barcode,
+                                    'brand': '',
+                                    'image_url': None,
+                                    'source': 'Barcode-List.ru'
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в barcode-list.ru: {e}")
+                
+                # Пробуем через barcodesdatabase.org
+                url = f"https://barcodesdatabase.org/barcode/{barcode}"
+                try:
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            html = await response.text()
+                            
+                            name_patterns = [
+                                r'<h1[^>]*>([^<]+)</h1>',
+                                r'<title>([^<]+)</title>',
+                                r'product[_-]?name["\']?\s*:\s*["\']([^"\']+)["\']',
+                            ]
+                            
+                            product_name = None
+                            for pattern in name_patterns:
+                                name_match = re.search(pattern, html, re.IGNORECASE)
+                                if name_match:
+                                    product_name = name_match.group(1).strip()
+                                    product_name = re.sub(r'\s*-\s*Barcode.*$', '', product_name, flags=re.IGNORECASE)
+                                    product_name = re.sub(r'\s*-\s*.*$', '', product_name, flags=re.IGNORECASE)
+                                    if is_valid_product_name(product_name):
+                                        break
+                                    else:
+                                        product_name = None
+                            
+                            if product_name and is_valid_product_name(product_name):
+                                logger.info(f"Продукт найден на barcodesdatabase.org: {product_name}")
+                                return {
+                                    'success': True,
+                                    'name': product_name,
+                                    'calories_per_100g': None,
+                                    'proteins_per_100g': None,
+                                    'fats_per_100g': None,
+                                    'carbs_per_100g': None,
+                                    'weight': None,
+                                    'barcode': barcode,
+                                    'brand': '',
+                                    'image_url': None,
+                                    'source': 'BarcodesDatabase.org'
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в barcodesdatabase.org: {e}")
+                
+                # Пробуем через gepir.gs1ru.org (российская база GS1)
+                url = f"https://gepir.gs1ru.org/v4/gtin/{barcode}"
+                try:
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            try:
+                                data = await response.json()
+                                # GS1 API обычно возвращает JSON с информацией о продукте
+                                product_name = data.get('productName') or data.get('name') or data.get('description')
+                                brand = data.get('brand') or data.get('manufacturer')
+                                
+                                if product_name and is_valid_product_name(product_name):
+                                    logger.info(f"Продукт найден на gepir.gs1ru.org: {product_name}")
+                                    return {
+                                        'success': True,
+                                        'name': product_name,
+                                        'calories_per_100g': None,
+                                        'proteins_per_100g': None,
+                                        'fats_per_100g': None,
+                                        'carbs_per_100g': None,
+                                        'weight': None,
+                                        'barcode': barcode,
+                                        'brand': brand or '',
+                                        'image_url': None,
+                                        'source': 'GS1 Russia (GEPIR)'
+                                    }
+                            except Exception as json_error:
+                                logger.debug(f"Ошибка парсинга JSON от gepir.gs1ru.org: {json_error}")
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в gepir.gs1ru.org: {e}")
+                
                 # Пробуем через upcdatabase.com
                 url = f"https://www.upcdatabase.com/item/{barcode}"
                 try:
@@ -1339,8 +1527,55 @@ class CalorieCounter:
                 except Exception as e:
                     logger.debug(f"Ошибка при поиске в barcode-list.com: {e}")
                 
-                # Пробуем через поиск в Google (через DuckDuckGo или прямой поиск)
-                # Используем простой поиск по штрих-коду
+                # Пробуем через поиск в Яндекс (лучше для российских товаров)
+                search_url = f"https://yandex.ru/search/?text={barcode}"
+                try:
+                    async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            html = await response.text()
+                            
+                            # Ищем название продукта в результатах поиска Яндекс
+                            name_patterns = [
+                                r'<h2[^>]*class=["\'][^"\']*organic__title[^"\']*["\'][^>]*>([^<]+)</h2>',
+                                r'<a[^>]*class=["\'][^"\']*organic__url[^"\']*["\'][^>]*>([^<]+)</a>',
+                                r'<h2[^>]*>([^<]+)</h2>',
+                            ]
+                            
+                            product_name = None
+                            for pattern in name_patterns:
+                                matches = re.findall(pattern, html, re.IGNORECASE)
+                                for match in matches[:5]:  # Проверяем первые 5 результатов
+                                    name = match.strip()
+                                    # Очищаем от HTML-сущностей и лишнего
+                                    name = re.sub(r'&[a-z]+;', '', name)
+                                    name = re.sub(r'&nbsp;', ' ', name)
+                                    name = re.sub(r'\s+', ' ', name).strip()
+                                    # Фильтруем результаты поиска Яндекс
+                                    if is_valid_product_name(name) and 'яндекс' not in name.lower():
+                                        product_name = name
+                                        break
+                                if product_name:
+                                    break
+                            
+                            if product_name and is_valid_product_name(product_name):
+                                logger.info(f"Продукт найден через Яндекс: {product_name}")
+                                return {
+                                    'success': True,
+                                    'name': product_name,
+                                    'calories_per_100g': None,
+                                    'proteins_per_100g': None,
+                                    'fats_per_100g': None,
+                                    'carbs_per_100g': None,
+                                    'weight': None,
+                                    'barcode': barcode,
+                                    'brand': '',
+                                    'image_url': None,
+                                    'source': 'Яндекс Поиск'
+                                }
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в Яндекс: {e}")
+                
+                # Пробуем через поиск в Google
                 search_url = f"https://www.google.com/search?q={barcode}"
                 try:
                     async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
@@ -1363,13 +1598,14 @@ class CalorieCounter:
                                     name = re.sub(r'&[a-z]+;', '', name)
                                     name = re.sub(r'\s+', ' ', name).strip()
                                     # Фильтруем результаты поиска Google
-                                    if is_valid_product_name(name):
+                                    if is_valid_product_name(name) and 'google' not in name.lower():
                                         product_name = name
                                         break
                                 if product_name:
                                     break
                             
                             if product_name and is_valid_product_name(product_name):
+                                logger.info(f"Продукт найден через Google: {product_name}")
                                 return {
                                     'success': True,
                                     'name': product_name,
