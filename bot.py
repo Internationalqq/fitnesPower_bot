@@ -14,6 +14,8 @@ import asyncio
 import logging
 import re
 from typing import Optional, Dict, List
+from aiohttp import web
+from aiohttp.web import Response
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -1677,11 +1679,45 @@ async def main():
     # Настройка планировщика для мотивирующих сообщений
     await setup_scheduler()
     
+    # Запускаем HTTP сервер для webapp (статики)
+    async def webapp_handler(request):
+        """Обработчик для раздачи webapp/index.html"""
+        webapp_path = os.path.join(script_dir, 'webapp', 'index.html')
+        try:
+            with open(webapp_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return Response(text=content, content_type='text/html')
+        except FileNotFoundError:
+            return Response(text='WebApp not found', status=404)
+    
+    # Создаём HTTP сервер для webapp
+    app = web.Application()
+    app.router.add_get('/webapp/index.html', webapp_handler)
+    app.router.add_get('/webapp/', webapp_handler)
+    
+    # Получаем порт из переменной окружения (Railway автоматически задаёт PORT)
+    port = int(os.getenv('PORT', 8000))
+    
+    # Запускаем HTTP сервер в фоне
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"✅ HTTP сервер запущен на порту {port}. WebApp доступен по: http://0.0.0.0:{port}/webapp/index.html")
+    
+    # Получаем публичный URL (Railway даёт его в переменной RAILWAY_PUBLIC_DOMAIN или можно использовать PORT)
+    railway_domain = os.getenv('RAILWAY_PUBLIC_DOMAIN')
+    if railway_domain:
+        webapp_public_url = f"https://{railway_domain}/webapp/index.html"
+        logger.info(f"🌐 Публичный URL WebApp: {webapp_public_url}")
+        logger.info(f"💡 Установи переменную WEB_APP_URL={webapp_public_url} в Railway")
+    
     logger.info("Бот запущен!")
     
     try:
         await dp.start_polling(bot)
     finally:
+        await runner.cleanup()
         await bot.session.close()
 
 

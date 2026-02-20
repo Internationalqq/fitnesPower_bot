@@ -798,15 +798,45 @@ class CalorieCounter:
                             if calories is None or calories == 0:
                                 calories = 250  # Среднее значение для неизвестных продуктов
                             
-                            # Получаем вес продукта (если указан)
-                            quantity = product.get('quantity', '')
-                            weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)', quantity, re.IGNORECASE)
+                            # Получаем вес продукта из разных источников
                             weight = None
-                            if weight_match:
-                                weight = float(weight_match.group(1))
-                                unit = weight_match.group(2).lower()
-                                if unit in ['кг', 'kg']:
-                                    weight *= 1000
+                            
+                            # 1. Пробуем извлечь из поля quantity
+                            quantity = product.get('quantity', '') or product.get('product_quantity', '')
+                            if quantity:
+                                weight_match = re.search(r'(\d+)\s*(г|g|кг|kg|ml|мл|l|л)', quantity, re.IGNORECASE)
+                                if weight_match:
+                                    weight = float(weight_match.group(1))
+                                    unit = weight_match.group(2).lower()
+                                    if unit in ['кг', 'kg']:
+                                        weight *= 1000
+                                    elif unit in ['л', 'l']:
+                                        # Для жидкостей считаем 1л = 1000г (приблизительно)
+                                        weight = float(weight_match.group(1)) * 1000
+                                    elif unit in ['мл', 'ml']:
+                                        # Для жидкостей считаем 1мл = 1г (приблизительно)
+                                        weight = float(weight_match.group(1))
+                            
+                            # 2. Если не нашли, пробуем извлечь из названия продукта
+                            if weight is None:
+                                # Ищем паттерны типа "290г", "60г", "100г" в названии
+                                name_weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', product_name, re.IGNORECASE)
+                                if name_weight_match:
+                                    weight = float(name_weight_match.group(1))
+                                    unit = name_weight_match.group(2).lower()
+                                    if unit in ['кг', 'kg']:
+                                        weight *= 1000
+                            
+                            # 3. Пробуем извлечь из serving_size или net_weight если есть
+                            if weight is None:
+                                serving_size = product.get('serving_size', '') or product.get('net_weight', '')
+                                if serving_size:
+                                    serving_match = re.search(r'(\d+)\s*(г|g|кг|kg)', serving_size, re.IGNORECASE)
+                                    if serving_match:
+                                        weight = float(serving_match.group(1))
+                                        unit = serving_match.group(2).lower()
+                                        if unit in ['кг', 'kg']:
+                                            weight *= 1000
                             
                             return {
                                 'success': True,
@@ -872,6 +902,16 @@ class CalorieCounter:
                             if cal_match:
                                 calories = int(cal_match.group(1))
                             
+                            # Пробуем извлечь вес из названия продукта
+                            weight = None
+                            if product_name:
+                                name_weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', product_name, re.IGNORECASE)
+                                if name_weight_match:
+                                    weight = float(name_weight_match.group(1))
+                                    unit = name_weight_match.group(2).lower()
+                                    if unit in ['кг', 'kg']:
+                                        weight *= 1000
+                            
                             return {
                                 'success': True,
                                 'name': product_name,
@@ -879,7 +919,7 @@ class CalorieCounter:
                                 'proteins_per_100g': proteins,
                                 'fats_per_100g': fats,
                                 'carbs_per_100g': carbs,
-                                'weight': None,
+                                'weight': weight,
                                 'barcode': barcode,
                                 'brand': brand,
                                 'image_url': item.get('images', [None])[0] if item.get('images') else None,
@@ -929,6 +969,16 @@ class CalorieCounter:
                             fats = nutrition.get('fat') or nutrition.get('fats')
                             carbs = nutrition.get('carbohydrates') or nutrition.get('carbs')
                             
+                            # Пробуем извлечь вес из названия продукта
+                            weight = None
+                            if product_name:
+                                name_weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', product_name, re.IGNORECASE)
+                                if name_weight_match:
+                                    weight = float(name_weight_match.group(1))
+                                    unit = name_weight_match.group(2).lower()
+                                    if unit in ['кг', 'kg']:
+                                        weight *= 1000
+                            
                             return {
                                 'success': True,
                                 'name': product_name,
@@ -936,7 +986,7 @@ class CalorieCounter:
                                 'proteins_per_100g': round(float(proteins), 1) if proteins else None,
                                 'fats_per_100g': round(float(fats), 1) if fats else None,
                                 'carbs_per_100g': round(float(carbs), 1) if carbs else None,
-                                'weight': None,
+                                'weight': weight,
                                 'barcode': barcode,
                                 'brand': brand,
                                 'image_url': product.get('images', [None])[0] if product.get('images') else None,
@@ -988,6 +1038,16 @@ class CalorieCounter:
                                         fats = nutrition.get('fats_100g') or nutrition.get('fat_100g')
                                         carbs = nutrition.get('carbohydrates_100g') or nutrition.get('carbs_100g')
                                         
+                                        # Пробуем извлечь вес из названия продукта
+                                        weight = None
+                                        if name:
+                                            name_weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', name, re.IGNORECASE)
+                                            if name_weight_match:
+                                                weight = float(name_weight_match.group(1))
+                                                unit = name_weight_match.group(2).lower()
+                                                if unit in ['кг', 'kg']:
+                                                    weight *= 1000
+                                        
                                         return {
                                             'success': True,
                                             'name': name,
@@ -995,7 +1055,7 @@ class CalorieCounter:
                                             'proteins_per_100g': round(float(proteins), 1) if proteins else None,
                                             'fats_per_100g': round(float(fats), 1) if fats else None,
                                             'carbs_per_100g': round(float(carbs), 1) if carbs else None,
-                                            'weight': None,
+                                            'weight': weight,
                                             'barcode': barcode,
                                             'brand': json_data.get('brand', ''),
                                             'image_url': json_data.get('image'),
@@ -1343,7 +1403,18 @@ class CalorieCounter:
         fats_per_100g = product_info.get('fats_per_100g')
         carbs_per_100g = product_info.get('carbs_per_100g')
         weight = product_info.get('weight')
+        product_name = product_info.get('name', '')
         source = product_info.get('source', 'Штрих-код')
+        
+        # Если вес не был найден в базе, пробуем извлечь из названия продукта
+        if weight is None and product_name:
+            name_weight_match = re.search(r'(\d+)\s*(г|g|кг|kg)\b', product_name, re.IGNORECASE)
+            if name_weight_match:
+                weight = float(name_weight_match.group(1))
+                unit = name_weight_match.group(2).lower()
+                if unit in ['кг', 'kg']:
+                    weight *= 1000
+                logger.info(f"Вес {weight}г извлечен из названия продукта: {product_name}")
         
         proteins = None
         fats = None
@@ -1352,17 +1423,21 @@ class CalorieCounter:
         if weight:
             # Если известен вес продукта, используем его
             calories = int((calories_per_100g / 100) * weight)
-            meal_name = f"{product_info['name']} {int(weight)}г"
+            meal_name = f"{product_name} {int(weight)}г"
             if proteins_per_100g is not None:
                 proteins = round((proteins_per_100g / 100) * weight, 1)
             if fats_per_100g is not None:
                 fats = round((fats_per_100g / 100) * weight, 1)
             if carbs_per_100g is not None:
                 carbs = round((carbs_per_100g / 100) * weight, 1)
+            logger.info(f"Добавлен продукт с весом: {product_name}, вес={weight}г, калории={calories} ккал (на 100г: {calories_per_100g})")
         else:
             # Если вес не указан, используем стандартное значение (100г или 1шт)
+            # НО: для некоторых продуктов это может быть неправильно
+            # Логируем предупреждение
+            logger.warning(f"Вес продукта не найден: {product_name}, используется 100г по умолчанию")
             calories = calories_per_100g
-            meal_name = f"{product_info['name']} 100г"
+            meal_name = f"{product_name} 100г"
             if proteins_per_100g is not None:
                 proteins = round(proteins_per_100g, 1)
             if fats_per_100g is not None:
